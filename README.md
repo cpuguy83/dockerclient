@@ -11,6 +11,7 @@ package main
 import(
   docker "github.com/cpuguy83/dockerclient"
   "fmt"
+  "os"
 )
 
 func main() {
@@ -18,7 +19,8 @@ func main() {
 
   containers, err := client.FetchAllContainers()
   if err != nil {
-    return err
+    fmt.Println(err)
+    os.Exit(1)
   }
 
   for _, container := range containers {

@@ -11,9 +11,8 @@ import (
 	"net/http/httputil"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
-
-	"github.com/cpuguy83/docker-grand-ambassador/utils"
 )
 
 type (
@@ -103,7 +102,7 @@ func NewClient(path string) (Docker, error) {
 }
 
 func (d *dockerClient) newConn() (*httputil.ClientConn, error) {
-	proto, path := utils.ParseURL(d.path)
+	proto, path := ParseURL(d.path)
 	conn, err := net.Dial(proto, path)
 
 	if err != nil {
@@ -130,7 +129,7 @@ func (docker *dockerClient) PullImage(name string) error {
 func (docker *dockerClient) RemoveContainer(name string, force, volumes bool) error {
 	var (
 		method = "DELETE"
-		uri    = fmt.Sprintf("/containers/%s?force=%s&volumes=%s", name, force, volumes)
+		uri    = fmt.Sprintf("/containers/%s?force=%s&volumes=%s", name, strconv.FormatBool(force), strconv.FormatBool(volumes))
 	)
 
 	respBody, err := docker.newRequest(method, uri, nil)

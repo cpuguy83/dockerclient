@@ -117,11 +117,13 @@ func (docker *dockerClient) PullImage(name string) error {
 		uri    = fmt.Sprintf("/images/create?fromImage=%s", name)
 	)
 
-	respBody, err := docker.newRequest(method, uri, nil)
+	respBody, conn, err := docker.newRequestStream(method, uri, nil)
 	if err != nil {
 		return nil
 	}
-	defer respBody.Close()
+
+	respBody.Close()
+	conn.Close()
 
 	return nil
 }
@@ -259,6 +261,36 @@ func (docker *dockerClient) newRequest(method, uri string, body interface{}) (io
 		return resp.Body, nil
 	}
 	return nil, fmt.Errorf("invalid HTTP request %d %s", resp.StatusCode, resp.Status)
+}
+
+func (docker *dockerClient) newRequestStream(method, uri string, body interface{}) (io.ReadCloser, *httputil.ClientConn, error) {
+	bodyJson, err := json.Marshal(body)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	req, err := http.NewRequest(method, uri, bytes.NewBuffer(bodyJson))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	c, err := docker.newConn()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if !docker.isOkStatus(resp.StatusCode) {
+		return nil, nil, fmt.Errorf("invalid HTTP request %d %s", resp.StatusCode, resp.Status)
+	}
+
+	return resp.Body, c, nil
 }
 
 func (d *dockerClient) isOkStatus(code int) bool {

@@ -51,22 +51,6 @@ type (
 		Running bool
 	}
 
-	Container struct {
-		Id              string
-		Name            string
-		NetworkSettings *NetworkSettings
-		State           State
-		Config          struct {
-			Image        string
-			AttachStderr bool
-			AttachStdin  bool
-			AttachStdout bool
-		}
-		HostConfig struct {
-			PortBindings map[string][]Binding
-		}
-	}
-
 	dockerClient struct {
 		path string
 	}

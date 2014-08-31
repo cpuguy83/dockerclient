@@ -28,6 +28,8 @@ type (
 		RunContainer(map[string]interface{}) (string, error)
 		RemoveContainer(name string, force, volumes bool) error
 		ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) chan string
+		ContainerPause(id string) error
+		ContainerUnpause(id string) error
 	}
 
 	Event struct {
@@ -387,4 +389,37 @@ func (d *dockerClient) ContainerLogs(id string, follow, stdout, stderr, timestam
 		log.Printf("closing logs channel")
 	}()
 	return logChan
+}
+
+func (d *dockerClient) ContainerPause(id string) error {
+	var (
+		method = "POST"
+		uri    = fmt.Sprintf("/containers/%s/pause", id)
+	)
+	respBody, conn, err := d.newRequest(method, uri, nil)
+	if err != nil {
+		return err
+	}
+
+	respBody.Close()
+	conn.Close()
+
+	return nil
+	return nil
+}
+
+func (d *dockerClient) ContainerUnpause(id string) error {
+	var (
+		method = "POST"
+		uri    = fmt.Sprintf("/containers/%s/unpause", id)
+	)
+	respBody, conn, err := d.newRequest(method, uri, nil)
+	if err != nil {
+		return err
+	}
+
+	respBody.Close()
+	conn.Close()
+
+	return nil
 }

@@ -30,6 +30,7 @@ type (
 		ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) chan string
 		ContainerPause(id string) error
 		ContainerUnpause(id string) error
+		Copy(id string, file string) chan string
 	}
 
 	Event struct {
@@ -331,7 +332,6 @@ func (d *dockerClient) GetEvents() chan *Event {
 			}
 			eventChan <- event
 		}
-		log.Printf("closing event channel")
 	}()
 	return eventChan
 }
@@ -370,9 +370,46 @@ func (d *dockerClient) ContainerLogs(id string, follow, stdout, stderr, timestam
 		for scanner.Scan() {
 			logChan <- scanner.Text()
 		}
-		log.Printf("closing logs channel")
 	}()
 	return logChan
+}
+
+func (d *dockerClient) Copy(id string, file string) chan string {
+	var (
+		method = "POST"
+		uri    = fmt.Sprintf("/containers/%s/copy", id)
+		body   = map[string]string{"Resource": file}
+	)
+
+	outChan := make(chan string, 100) // 100 event buffer
+	go func() {
+		defer close(outChan)
+
+		respBody, conn, err := d.newRequest(method, uri, body)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		// handle signals to stop the socket
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+		go func() {
+			for sig := range sigChan {
+				log.Printf("received signal '%v', exiting", sig)
+
+				conn.Close()
+				close(outChan)
+				os.Exit(0)
+			}
+		}()
+
+		scanner := bufio.NewScanner(respBody)
+		for scanner.Scan() {
+			outChan <- scanner.Text()
+		}
+	}()
+	return outChan
 }
 
 func (d *dockerClient) ContainerPause(id string) error {
@@ -381,15 +418,11 @@ func (d *dockerClient) ContainerPause(id string) error {
 		uri    = fmt.Sprintf("/containers/%s/pause", id)
 	)
 	respBody, conn, err := d.newRequest(method, uri, nil)
-	if err != nil {
-		return err
-	}
-
-	respBody.Close()
-	conn.Close()
-
-	return nil
-	return nil
+	defer func() {
+		respBody.Close()
+		conn.Close()
+	}()
+	return err
 }
 
 func (d *dockerClient) ContainerUnpause(id string) error {
@@ -398,12 +431,10 @@ func (d *dockerClient) ContainerUnpause(id string) error {
 		uri    = fmt.Sprintf("/containers/%s/unpause", id)
 	)
 	respBody, conn, err := d.newRequest(method, uri, nil)
-	if err != nil {
-		return err
-	}
+	defer func() {
+		respBody.Close()
+		conn.Close()
+	}()
 
-	respBody.Close()
-	conn.Close()
-
-	return nil
+	return err
 }

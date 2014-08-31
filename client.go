@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -26,6 +27,7 @@ type (
 		StartContainer(string, interface{}) error
 		RunContainer(map[string]interface{}) (string, error)
 		RemoveContainer(name string, force, volumes bool) error
+		ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) chan string
 	}
 
 	Event struct {
@@ -77,7 +79,7 @@ type (
 		Images             int
 		IndexServerAddress string
 		InitPath           string
-		INitSha1           string
+		InitSha1           string
 		KernelVersion      string
 		MemoryLimit        int
 		NEventsListener    int
@@ -117,7 +119,7 @@ func (docker *dockerClient) PullImage(name string) error {
 		uri    = fmt.Sprintf("/images/create?fromImage=%s", name)
 	)
 
-	respBody, conn, err := docker.newRequestStream(method, uri, nil)
+	respBody, conn, err := docker.newRequest(method, uri, nil)
 	if err != nil {
 		return nil
 	}
@@ -134,11 +136,12 @@ func (docker *dockerClient) RemoveContainer(name string, force, volumes bool) er
 		uri    = fmt.Sprintf("/containers/%s?force=%s&volumes=%s", name, strconv.FormatBool(force), strconv.FormatBool(volumes))
 	)
 
-	respBody, err := docker.newRequest(method, uri, nil)
+	respBody, conn, err := docker.newRequest(method, uri, nil)
 	if err != nil {
 		return err
 	}
-	defer respBody.Close()
+	respBody.Close()
+	conn.Close()
 
 	return nil
 }
@@ -147,15 +150,20 @@ func (docker *dockerClient) CreateContainer(container map[string]interface{}) (s
 	var (
 		method = "POST"
 		name   string
-		uri    = fmt.Sprintf("/containers/create?name=%s", container["Name"])
+		uri    = "/containers/create"
 	)
 
+	if _, exists := container["Name"]; exists {
+		uri = fmt.Sprintf("%s?name=%v", uri, name)
+	}
+
 	delete(container, "Name")
-	respBody, err := docker.newRequest(method, uri, container)
+	respBody, conn, err := docker.newRequest(method, uri, container)
 	if err != nil {
 		return "", err
 	}
 	defer respBody.Close()
+	defer conn.Close()
 
 	type createResp struct {
 		Id string
@@ -176,11 +184,12 @@ func (docker *dockerClient) StartContainer(name string, hostConfig interface{}) 
 		uri    = fmt.Sprintf("/containers/%s/start", name)
 	)
 
-	respBody, err := docker.newRequest(method, uri, hostConfig)
+	respBody, conn, err := docker.newRequest(method, uri, hostConfig)
 	if err != nil {
 		return err
 	}
 	defer respBody.Close()
+	defer conn.Close()
 
 	return nil
 }
@@ -201,11 +210,12 @@ func (docker *dockerClient) FetchContainer(name string) (*Container, error) {
 		uri    = fmt.Sprintf("/containers/%s/json", name)
 	)
 
-	respBody, err := docker.newRequest(method, uri, nil)
+	respBody, conn, err := docker.newRequest(method, uri, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer respBody.Close()
+	defer conn.Close()
 	var container *Container
 	err = json.NewDecoder(respBody).Decode(&container)
 	if err != nil {
@@ -220,11 +230,12 @@ func (docker *dockerClient) FetchAllContainers() ([]*Container, error) {
 		uri    = "/containers/json"
 	)
 
-	respBody, err := docker.newRequest(method, uri, nil)
+	respBody, conn, err := docker.newRequest(method, uri, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer respBody.Close()
+	defer conn.Close()
 
 	var containers []*Container
 	if err = json.NewDecoder(respBody).Decode(&containers); err != nil {
@@ -233,37 +244,7 @@ func (docker *dockerClient) FetchAllContainers() ([]*Container, error) {
 	return containers, nil
 }
 
-func (docker *dockerClient) newRequest(method, uri string, body interface{}) (io.ReadCloser, error) {
-	bodyJson, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(method, uri, bytes.NewBuffer(bodyJson))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	c, err := docker.newConn()
-	if err != nil {
-		return nil, err
-	}
-	defer c.Close()
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if docker.isOkStatus(resp.StatusCode) {
-		return resp.Body, nil
-	}
-	return nil, fmt.Errorf("invalid HTTP request %d %s", resp.StatusCode, resp.Status)
-}
-
-func (docker *dockerClient) newRequestStream(method, uri string, body interface{}) (io.ReadCloser, *httputil.ClientConn, error) {
+func (docker *dockerClient) newRequest(method, uri string, body interface{}) (io.ReadCloser, *httputil.ClientConn, error) {
 	bodyJson, err := json.Marshal(body)
 	if err != nil {
 		return nil, nil, err
@@ -314,11 +295,12 @@ func (docker *dockerClient) Info() (*DaemonInfo, error) {
 		uri    = "/info"
 	)
 
-	respBody, err := docker.newRequest(method, uri, nil)
+	respBody, conn, err := docker.newRequest(method, uri, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer respBody.Close()
+	defer conn.Close()
 
 	var info *DaemonInfo
 	if err = json.NewDecoder(respBody).Decode(&info); err != nil {
@@ -332,25 +314,11 @@ func (d *dockerClient) GetEvents() chan *Event {
 	go func() {
 		defer close(eventChan)
 
-		c, err := d.newConn()
+		respBody, conn, err := d.newRequest("GET", "/events", nil)
 		if err != nil {
-			log.Printf("cannot connect to docker: %s", err)
+			fmt.Println(err)
 			return
 		}
-		defer c.Close()
-
-		req, err := http.NewRequest("GET", "/events", nil)
-		if err != nil {
-			log.Printf("bad request for events: %s", err)
-			return
-		}
-
-		resp, err := c.Do(req)
-		if err != nil {
-			log.Printf("cannot connect to events endpoint: %s", err)
-			return
-		}
-		defer resp.Body.Close()
 
 		// handle signals to stop the socket
 		sigChan := make(chan os.Signal, 1)
@@ -359,13 +327,13 @@ func (d *dockerClient) GetEvents() chan *Event {
 			for sig := range sigChan {
 				log.Printf("received signal '%v', exiting", sig)
 
-				c.Close()
+				conn.Close()
 				close(eventChan)
 				os.Exit(0)
 			}
 		}()
 
-		dec := json.NewDecoder(resp.Body)
+		dec := json.NewDecoder(respBody)
 		for {
 			var event *Event
 			if err := dec.Decode(&event); err != nil {
@@ -380,4 +348,43 @@ func (d *dockerClient) GetEvents() chan *Event {
 		log.Printf("closing event channel")
 	}()
 	return eventChan
+}
+
+func (d *dockerClient) ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) chan string {
+	logChan := make(chan string, 100) // 100 event buffer
+	tailStr := strconv.Itoa(tail)
+	if tail == -1 {
+		tailStr = "all"
+	}
+	go func() {
+		defer close(logChan)
+
+		uri := fmt.Sprintf("/containers/%s/logs?follow=%v&stdout=%v&stderr=%v&timestamps=%v&tail=%v", id, follow, stdout, stderr, timestamps, tailStr)
+
+		respBody, conn, err := d.newRequest("GET", uri, nil)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		// handle signals to stop the socket
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+		go func() {
+			for sig := range sigChan {
+				log.Printf("received signal '%v', exiting", sig)
+
+				conn.Close()
+				close(logChan)
+				os.Exit(0)
+			}
+		}()
+
+		scanner := bufio.NewScanner(respBody)
+		for scanner.Scan() {
+			logChan <- scanner.Text()
+		}
+		log.Printf("closing logs channel")
+	}()
+	return logChan
 }

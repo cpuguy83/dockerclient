@@ -30,7 +30,7 @@ type (
 		ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) chan string
 		ContainerPause(id string) error
 		ContainerUnpause(id string) error
-		Copy(id string, file string) chan string
+		Copy(id string, file string) (io.Reader, error)
 	}
 
 	Event struct {
@@ -374,42 +374,19 @@ func (d *dockerClient) ContainerLogs(id string, follow, stdout, stderr, timestam
 	return logChan
 }
 
-func (d *dockerClient) Copy(id string, file string) chan string {
+func (d *dockerClient) Copy(id string, file string) (io.Reader, error) {
 	var (
 		method = "POST"
 		uri    = fmt.Sprintf("/containers/%s/copy", id)
 		body   = map[string]string{"Resource": file}
 	)
 
-	outChan := make(chan string, 100) // 100 event buffer
-	go func() {
-		defer close(outChan)
+	respBody, _, err := d.newRequest(method, uri, body)
+	if err != nil {
+		return nil, err
+	}
 
-		respBody, conn, err := d.newRequest(method, uri, body)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		// handle signals to stop the socket
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-		go func() {
-			for sig := range sigChan {
-				log.Printf("received signal '%v', exiting", sig)
-
-				conn.Close()
-				close(outChan)
-				os.Exit(0)
-			}
-		}()
-
-		scanner := bufio.NewScanner(respBody)
-		for scanner.Scan() {
-			outChan <- scanner.Text()
-		}
-	}()
-	return outChan
+	return respBody, nil
 }
 
 func (d *dockerClient) ContainerPause(id string) error {

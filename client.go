@@ -1,7 +1,6 @@
 package docker
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -27,7 +26,7 @@ type (
 		StartContainer(string, interface{}) error
 		RunContainer(map[string]interface{}) (string, error)
 		RemoveContainer(name string, force, volumes bool) error
-		ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) chan string
+		ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) (io.Reader, error)
 		ContainerPause(id string) error
 		ContainerUnpause(id string) error
 		Copy(id string, file string) (io.Reader, error)
@@ -336,42 +335,19 @@ func (d *dockerClient) GetEvents() chan *Event {
 	return eventChan
 }
 
-func (d *dockerClient) ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) chan string {
-	logChan := make(chan string, 100) // 100 event buffer
+func (d *dockerClient) ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) (io.Reader, error) {
 	tailStr := strconv.Itoa(tail)
 	if tail == -1 {
 		tailStr = "all"
 	}
-	go func() {
-		defer close(logChan)
+	uri := fmt.Sprintf("/containers/%s/logs?follow=%v&stdout=%v&stderr=%v&timestamps=%v&tail=%v", id, follow, stdout, stderr, timestamps, tailStr)
 
-		uri := fmt.Sprintf("/containers/%s/logs?follow=%v&stdout=%v&stderr=%v&timestamps=%v&tail=%v", id, follow, stdout, stderr, timestamps, tailStr)
+	respBody, _, err := d.newRequest("GET", uri, nil)
+	if err != nil {
+		return nil, err
+	}
 
-		respBody, conn, err := d.newRequest("GET", uri, nil)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		// handle signals to stop the socket
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-		go func() {
-			for sig := range sigChan {
-				log.Printf("received signal '%v', exiting", sig)
-
-				conn.Close()
-				close(logChan)
-				os.Exit(0)
-			}
-		}()
-
-		scanner := bufio.NewScanner(respBody)
-		for scanner.Scan() {
-			logChan <- scanner.Text()
-		}
-	}()
-	return logChan
+	return respBody, nil
 }
 
 func (d *dockerClient) Copy(id string, file string) (io.Reader, error) {

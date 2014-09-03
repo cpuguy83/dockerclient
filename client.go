@@ -17,7 +17,7 @@ import (
 
 type (
 	Docker interface {
-		FetchAllContainers() ([]*Container, error)
+		FetchAllContainers(all bool) ([]*Container, error)
 		FetchContainer(name string) (*Container, error)
 		GetEvents() chan *Event
 		Info() (*DaemonInfo, error)
@@ -210,10 +210,10 @@ func (docker *dockerClient) FetchContainer(name string) (*Container, error) {
 	return container, nil
 }
 
-func (docker *dockerClient) FetchAllContainers() ([]*Container, error) {
+func (docker *dockerClient) FetchAllContainers(all bool) ([]*Container, error) {
 	var (
 		method = "GET"
-		uri    = "/containers/json"
+		uri    = fmt.Sprintf("/containers/json?all=%v", all)
 	)
 
 	respBody, conn, err := docker.newRequest(method, uri, nil)

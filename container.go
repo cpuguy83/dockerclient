@@ -9,8 +9,10 @@ type Container struct {
 	Id              string
 	Name            string
 	NetworkSettings *NetworkSettings
-	State           State
-	Config          struct {
+	State           struct {
+		Running bool
+	}
+	Config struct {
 		Image        string
 		AttachStderr bool
 		AttachStdin  bool

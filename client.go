@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -30,6 +33,10 @@ type (
 		ContainerPause(id string) error
 		ContainerUnpause(id string) error
 		Copy(id string, file string) (io.Reader, error)
+		Build(ctx io.Reader, tag string, nocache bool, forcerm bool) (io.Reader, error)
+		DecodeStream(stream io.Reader) []string
+		RemoveImage(name string, force bool, noprune bool) (io.Reader, error)
+		ContainerWait(name string) error
 	}
 
 	Event struct {
@@ -45,10 +52,6 @@ type (
 	NetworkSettings struct {
 		IpAddress string
 		Ports     map[string][]Binding
-	}
-
-	State struct {
-		Running bool
 	}
 
 	dockerClient struct {
@@ -197,6 +200,7 @@ func (docker *dockerClient) FetchContainer(name string) (*Container, error) {
 	)
 
 	respBody, conn, err := docker.newRequest(method, uri, nil)
+
 	if err != nil {
 		return nil, err
 	}
@@ -371,11 +375,12 @@ func (d *dockerClient) ContainerPause(id string) error {
 		uri    = fmt.Sprintf("/containers/%s/pause", id)
 	)
 	respBody, conn, err := d.newRequest(method, uri, nil)
-	defer func() {
-		respBody.Close()
-		conn.Close()
-	}()
-	return err
+	if err != nil {
+		return err
+	}
+	respBody.Close()
+	conn.Close()
+	return nil
 }
 
 func (d *dockerClient) ContainerUnpause(id string) error {
@@ -384,10 +389,113 @@ func (d *dockerClient) ContainerUnpause(id string) error {
 		uri    = fmt.Sprintf("/containers/%s/unpause", id)
 	)
 	respBody, conn, err := d.newRequest(method, uri, nil)
-	defer func() {
-		respBody.Close()
-		conn.Close()
-	}()
+	if err != nil {
+		return err
+	}
+	respBody.Close()
+	conn.Close()
 
-	return err
+	return nil
+}
+
+func (d *dockerClient) Build(ctx io.Reader, tag string, nocache bool, forcerm bool) (io.Reader, error) {
+	var (
+		method = "POST"
+		uri    = "/build"
+	)
+
+	v := &url.Values{}
+	if tag != "" {
+		v.Set("t", tag)
+	}
+	if nocache {
+		v.Set("nocache", "1")
+	}
+	v.Set("rm", "1")
+	if forcerm {
+		v.Set("forcerm", "1")
+	}
+
+	uri = fmt.Sprintf("%s?%s", uri, v.Encode())
+	req, err := http.NewRequest(method, uri, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/tar")
+
+	c, err := d.newConn()
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if !d.isOkStatus(resp.StatusCode) {
+		return nil, fmt.Errorf("invalid HTTP request %d %s", resp.StatusCode, resp.Status)
+	}
+
+	return resp.Body, nil
+}
+
+func (d *dockerClient) DecodeStream(stream io.Reader) []string {
+	type msg struct {
+		Stream string `json:stream`
+	}
+	var msgs []string
+	dec := json.NewDecoder(stream)
+	for {
+		var m msg
+		if err := dec.Decode(&m); err != nil {
+			if err == io.EOF {
+				break
+			}
+			continue
+		}
+		msgs = append(msgs, strings.TrimSuffix(m.Stream, "\n"))
+	}
+	return msgs
+}
+
+func (d *dockerClient) RemoveImage(name string, force bool, noprune bool) (io.Reader, error) {
+	var (
+		method = "DELETE"
+		uri    = fmt.Sprintf("/images/%s", name)
+		v      = &url.Values{}
+	)
+	if force {
+		v.Set("force", "1")
+	}
+	if noprune {
+		v.Set("noprune", "1")
+	}
+	uri = fmt.Sprintf("%s?%s", uri, v.Encode())
+
+	respBody, _, err := d.newRequest(method, uri, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return respBody, nil
+}
+
+func (d *dockerClient) ContainerWait(name string) error {
+	var (
+		method = "POST"
+		uri    = fmt.Sprintf("/containers/%s/wait", name)
+	)
+
+	respBody, conn, err := d.newRequest(method, uri, nil)
+	if err != nil {
+		return err
+	}
+
+	defer respBody.Close()
+	defer conn.Close()
+
+	ioutil.ReadAll(respBody)
+	return nil
 }

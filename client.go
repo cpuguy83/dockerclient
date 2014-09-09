@@ -149,7 +149,16 @@ func (docker *dockerClient) CreateContainer(container map[string]interface{}) (s
 	delete(container, "Name")
 	respBody, conn, err := docker.newRequest(method, uri, container)
 	if err != nil {
-		return "", err
+		// Try to see if we just need to download the image
+		if fmt.Sprintf("%v", err) == "invalid HTTP request 404 404 Not Found" {
+			if err := docker.PullImage(fmt.Sprintf("%s", container["Image"])); err != nil {
+				return "", err
+			}
+			respBody, conn, err = docker.newRequest(method, uri, container)
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 	defer respBody.Close()
 	defer conn.Close()

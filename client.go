@@ -2,6 +2,7 @@ package docker
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ type (
 		DecodeStream(stream io.Reader) []string
 		RemoveImage(name string, force bool, noprune bool) (io.Reader, error)
 		ContainerWait(name string) error
+		SetTlsConfig(config *tls.Config)
 	}
 
 	Event struct {
@@ -55,7 +57,8 @@ type (
 	}
 
 	dockerClient struct {
-		path string
+		path      string
+		tlsConfig *tls.Config
 	}
 
 	DaemonInfo struct {
@@ -89,12 +92,24 @@ func (d *DaemonInfo) RootPath() string {
 }
 
 func NewClient(path string) (Docker, error) {
-	return &dockerClient{path}, nil
+	return &dockerClient{path: path}, nil
+}
+
+func (d *dockerClient) SetTlsConfig(config *tls.Config) {
+	d.tlsConfig = config
 }
 
 func (d *dockerClient) newConn() (*httputil.ClientConn, error) {
+	var (
+		conn net.Conn
+		err  error
+	)
 	proto, path := ParseURL(d.path)
-	conn, err := net.Dial(proto, path)
+	if d.tlsConfig == nil {
+		conn, err = net.Dial(proto, path)
+	} else {
+		conn, err = tls.Dial(proto, path, d.tlsConfig)
+	}
 
 	if err != nil {
 		return nil, err

@@ -1,6 +1,6 @@
 # Dockerclient
 
-Dockerlient is a client library for Docker written in go, with a straight-forward
+Dockerclient is a client library for Docker written in go, with a straight-forward
 syntax.
 
 ### Usage

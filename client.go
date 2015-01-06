@@ -39,6 +39,7 @@ type (
 		RemoveImage(name string, force bool, noprune bool) (io.Reader, error)
 		ContainerWait(name string) error
 		SetTlsConfig(config *tls.Config)
+		//Attach(name string, logs, stream, stdin, stdout, stderr bool) (io.Reader, io.Writer, error)
 	}
 
 	Event struct {
@@ -63,22 +64,28 @@ type (
 
 	DaemonInfo struct {
 		Containers         int
-		Debug              int
+		Images             int
 		Driver             string
 		DriverStatus       [][]string
 		ExecutionDriver    string
-		IPv4Forwarding     int
-		Images             int
-		IndexServerAddress string
-		InitPath           string
-		InitSha1           string
 		KernelVersion      string
-		MemoryLimit        int
-		NEventsListener    int
+		NCPU               int
+		MemTotal           int64
+		Name               string
+		ID                 string
+		Debug              int
 		NFd                int
 		NGoroutines        int
-		Sockets            []string
-		SwapLimit          int
+		NEventsListener    int
+		InitPath           string
+		InitSha1           string
+		IndexServerAddress string
+		MemoryLimit        bool
+		SwapLimit          bool
+		IPv4Forwarding     bool
+		Labels             []string
+		DockerRootDir      string
+		OperatingSystem    string
 	}
 )
 
@@ -522,4 +529,31 @@ func (d *dockerClient) ContainerWait(name string) error {
 
 	ioutil.ReadAll(respBody)
 	return nil
+}
+
+func (d *dockerClient) Attach(name string, logs, stream, stdout, stderr bool, inStream io.Writer) (io.Reader, io.Writer, error) {
+	var (
+		//method = "POST"
+		uri = fmt.Sprintf("/containers/%s/attach", name)
+	)
+	var v url.Values
+	if logs {
+		v.Set("logs", "1")
+	}
+	if stream {
+		v.Set("stream", "1")
+	}
+	if inStream != nil {
+		v.Set("stdin", "1")
+	}
+	if stdout {
+		v.Set("stdout", "1")
+	}
+	if stderr {
+		v.Set("stderr", "1")
+	}
+	uri = fmt.Sprintf("%s?%s", uri, v.Encode())
+
+	//respBody, conn, err := d.newRequest(method, uri, inStream)
+	return nil, nil, nil
 }

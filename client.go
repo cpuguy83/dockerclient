@@ -39,6 +39,7 @@ type (
 		RemoveImage(name string, force bool, noprune bool) (io.Reader, error)
 		ContainerWait(name string) error
 		SetTlsConfig(config *tls.Config)
+		Version() (*DaemonVersion, error)
 		//Attach(name string, logs, stream, stdin, stdout, stderr bool) (io.Reader, io.Writer, error)
 	}
 
@@ -86,6 +87,16 @@ type (
 		Labels             []string
 		DockerRootDir      string
 		OperatingSystem    string
+	}
+
+	DaemonVersion struct {
+		ApiVersion    string
+		Arch          string
+		GitCommit     string
+		GoVersion     string
+		KernelVersion string
+		Os            string
+		Version       string
 	}
 )
 
@@ -328,6 +339,26 @@ func (docker *dockerClient) Info() (*DaemonInfo, error) {
 		return nil, err
 	}
 	return info, nil
+}
+
+func (docker *dockerClient) Version() (*DaemonVersion, error) {
+	var (
+		method = "GET"
+		uri    = "/version"
+	)
+
+	respBody, conn, err := docker.newRequest(method, uri, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer respBody.Close()
+	defer conn.Close()
+
+	var version *DaemonVersion
+	if err = json.NewDecoder(respBody).Decode(&version); err != nil {
+		return nil, err
+	}
+	return version, nil
 }
 
 func (d *dockerClient) GetEvents() chan *Event {

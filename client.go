@@ -81,9 +81,9 @@ type (
 		InitPath           string
 		InitSha1           string
 		IndexServerAddress string
-		MemoryLimit        bool
-		SwapLimit          bool
-		IPv4Forwarding     bool
+		MemoryLimit        int
+		SwapLimit          int
+		IPv4Forwarding     int
 		Labels             []string
 		DockerRootDir      string
 		OperatingSystem    string

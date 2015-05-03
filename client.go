@@ -30,16 +30,17 @@ type (
 		StartContainer(string, interface{}) error
 		RunContainer(map[string]interface{}) (string, error)
 		RemoveContainer(name string, force, volumes bool) error
-		ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) (io.Reader, error)
+		ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) (io.ReadCloser, error)
 		ContainerPause(id string) error
 		ContainerUnpause(id string) error
-		Copy(id string, file string) (io.Reader, error)
-		Build(ctx io.Reader, tag string, nocache bool, forcerm bool) (io.Reader, error)
+		Copy(id string, file string) (io.ReadCloser, error)
+		Build(ctx io.Reader, tag string, nocache bool, forcerm bool) (io.ReadCloser, error)
 		DecodeStream(stream io.Reader) []string
-		RemoveImage(name string, force bool, noprune bool) (io.Reader, error)
+		RemoveImage(name string, force bool, noprune bool) (io.ReadCloser, error)
 		ContainerWait(name string) error
 		SetTlsConfig(config *tls.Config)
 		Version() (*DaemonVersion, error)
+		ContainerStats(name string) (io.ReadCloser, error)
 		//Attach(name string, logs, stream, stdin, stdout, stderr bool) (io.Reader, io.Writer, error)
 	}
 
@@ -141,13 +142,12 @@ func (docker *dockerClient) PullImage(name string) error {
 		uri    = fmt.Sprintf("/images/create?fromImage=%s", name)
 	)
 
-	respBody, conn, err := docker.newRequest(method, uri, nil)
+	respBody, err := docker.newRequest(method, uri, nil)
 	if err != nil {
 		return nil
 	}
 
 	respBody.Close()
-	conn.Close()
 
 	return nil
 }
@@ -158,12 +158,11 @@ func (docker *dockerClient) RemoveContainer(name string, force, volumes bool) er
 		uri    = fmt.Sprintf("/containers/%s?force=%s&volumes=%s", name, strconv.FormatBool(force), strconv.FormatBool(volumes))
 	)
 
-	respBody, conn, err := docker.newRequest(method, uri, nil)
+	respBody, err := docker.newRequest(method, uri, nil)
 	if err != nil {
 		return err
 	}
 	respBody.Close()
-	conn.Close()
 
 	return nil
 }
@@ -180,21 +179,20 @@ func (docker *dockerClient) CreateContainer(container map[string]interface{}) (s
 	}
 
 	delete(container, "Name")
-	respBody, conn, err := docker.newRequest(method, uri, container)
+	respBody, err := docker.newRequest(method, uri, container)
 	if err != nil {
 		// Try to see if we just need to download the image
 		if fmt.Sprintf("%v", err) == "invalid HTTP request 404 404 Not Found" {
 			if err := docker.PullImage(fmt.Sprintf("%s", container["Image"])); err != nil {
 				return "", err
 			}
-			respBody, conn, err = docker.newRequest(method, uri, container)
+			respBody, err = docker.newRequest(method, uri, container)
 		}
 		if err != nil {
 			return "", err
 		}
 	}
 	defer respBody.Close()
-	defer conn.Close()
 
 	type createResp struct {
 		Id string
@@ -215,12 +213,11 @@ func (docker *dockerClient) StartContainer(name string, hostConfig interface{}) 
 		uri    = fmt.Sprintf("/containers/%s/start", name)
 	)
 
-	respBody, conn, err := docker.newRequest(method, uri, hostConfig)
+	respBody, err := docker.newRequest(method, uri, hostConfig)
 	if err != nil {
 		return err
 	}
 	defer respBody.Close()
-	defer conn.Close()
 
 	return nil
 }
@@ -241,13 +238,12 @@ func (docker *dockerClient) FetchContainer(name string) (*Container, error) {
 		uri    = fmt.Sprintf("/containers/%s/json", name)
 	)
 
-	respBody, conn, err := docker.newRequest(method, uri, nil)
+	respBody, err := docker.newRequest(method, uri, nil)
 
 	if err != nil {
 		return nil, err
 	}
 	defer respBody.Close()
-	defer conn.Close()
 	var container *Container
 	err = json.NewDecoder(respBody).Decode(&container)
 	if err != nil {
@@ -262,12 +258,11 @@ func (docker *dockerClient) FetchAllContainers(all bool) ([]*Container, error) {
 		uri    = fmt.Sprintf("/containers/json?all=%v", all)
 	)
 
-	respBody, conn, err := docker.newRequest(method, uri, nil)
+	respBody, err := docker.newRequest(method, uri, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer respBody.Close()
-	defer conn.Close()
 
 	var containers []*Container
 	if err = json.NewDecoder(respBody).Decode(&containers); err != nil {
@@ -276,34 +271,39 @@ func (docker *dockerClient) FetchAllContainers(all bool) ([]*Container, error) {
 	return containers, nil
 }
 
-func (docker *dockerClient) newRequest(method, uri string, body interface{}) (io.ReadCloser, *httputil.ClientConn, error) {
+func (docker *dockerClient) newRequest(method, uri string, body interface{}) (io.ReadCloser, error) {
 	bodyJson, err := json.Marshal(body)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	req, err := http.NewRequest(method, uri, bytes.NewBuffer(bodyJson))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
 	c, err := docker.newConn()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if !docker.isOkStatus(resp.StatusCode) {
-		return nil, nil, fmt.Errorf("invalid HTTP request %d %s", resp.StatusCode, resp.Status)
+		return nil, fmt.Errorf("invalid HTTP request %d %s", resp.StatusCode, resp.Status)
 	}
 
-	return resp.Body, c, nil
+	r := newReadCloseWrapper(resp.Body, func() error {
+		resp.Body.Close()
+		return c.Close()
+	})
+
+	return r, nil
 }
 
 func (d *dockerClient) isOkStatus(code int) bool {
@@ -327,12 +327,11 @@ func (docker *dockerClient) Info() (*DaemonInfo, error) {
 		uri    = "/info"
 	)
 
-	respBody, conn, err := docker.newRequest(method, uri, nil)
+	respBody, err := docker.newRequest(method, uri, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer respBody.Close()
-	defer conn.Close()
 
 	var info *DaemonInfo
 	if err = json.NewDecoder(respBody).Decode(&info); err != nil {
@@ -347,12 +346,11 @@ func (docker *dockerClient) Version() (*DaemonVersion, error) {
 		uri    = "/version"
 	)
 
-	respBody, conn, err := docker.newRequest(method, uri, nil)
+	respBody, err := docker.newRequest(method, uri, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer respBody.Close()
-	defer conn.Close()
 
 	var version *DaemonVersion
 	if err = json.NewDecoder(respBody).Decode(&version); err != nil {
@@ -366,11 +364,12 @@ func (d *dockerClient) GetEvents() chan *Event {
 	go func() {
 		defer close(eventChan)
 
-		respBody, conn, err := d.newRequest("GET", "/events", nil)
+		respBody, err := d.newRequest("GET", "/events", nil)
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
+		defer respBody.Close()
 
 		// handle signals to stop the socket
 		sigChan := make(chan os.Signal, 1)
@@ -379,7 +378,7 @@ func (d *dockerClient) GetEvents() chan *Event {
 			for sig := range sigChan {
 				log.Printf("received signal '%v', exiting", sig)
 
-				conn.Close()
+				respBody.Close()
 				close(eventChan)
 				os.Exit(0)
 			}
@@ -401,14 +400,14 @@ func (d *dockerClient) GetEvents() chan *Event {
 	return eventChan
 }
 
-func (d *dockerClient) ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) (io.Reader, error) {
+func (d *dockerClient) ContainerLogs(id string, follow, stdout, stderr, timestamps bool, tail int) (io.ReadCloser, error) {
 	tailStr := strconv.Itoa(tail)
 	if tail == -1 {
 		tailStr = "all"
 	}
 	uri := fmt.Sprintf("/containers/%s/logs?follow=%v&stdout=%v&stderr=%v&timestamps=%v&tail=%v", id, follow, stdout, stderr, timestamps, tailStr)
 
-	respBody, _, err := d.newRequest("GET", uri, nil)
+	respBody, err := d.newRequest("GET", uri, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -416,14 +415,14 @@ func (d *dockerClient) ContainerLogs(id string, follow, stdout, stderr, timestam
 	return respBody, nil
 }
 
-func (d *dockerClient) Copy(id string, file string) (io.Reader, error) {
+func (d *dockerClient) Copy(id string, file string) (io.ReadCloser, error) {
 	var (
 		method = "POST"
 		uri    = fmt.Sprintf("/containers/%s/copy", id)
 		body   = map[string]string{"Resource": file}
 	)
 
-	respBody, _, err := d.newRequest(method, uri, body)
+	respBody, err := d.newRequest(method, uri, body)
 	if err != nil {
 		return nil, err
 	}
@@ -436,12 +435,11 @@ func (d *dockerClient) ContainerPause(id string) error {
 		method = "POST"
 		uri    = fmt.Sprintf("/containers/%s/pause", id)
 	)
-	respBody, conn, err := d.newRequest(method, uri, nil)
+	respBody, err := d.newRequest(method, uri, nil)
 	if err != nil {
 		return err
 	}
 	respBody.Close()
-	conn.Close()
 	return nil
 }
 
@@ -450,17 +448,16 @@ func (d *dockerClient) ContainerUnpause(id string) error {
 		method = "POST"
 		uri    = fmt.Sprintf("/containers/%s/unpause", id)
 	)
-	respBody, conn, err := d.newRequest(method, uri, nil)
+	respBody, err := d.newRequest(method, uri, nil)
 	if err != nil {
 		return err
 	}
 	respBody.Close()
-	conn.Close()
 
 	return nil
 }
 
-func (d *dockerClient) Build(ctx io.Reader, tag string, nocache bool, forcerm bool) (io.Reader, error) {
+func (d *dockerClient) Build(ctx io.Reader, tag string, nocache bool, forcerm bool) (io.ReadCloser, error) {
 	var (
 		method = "POST"
 		uri    = "/build"
@@ -522,7 +519,7 @@ func (d *dockerClient) DecodeStream(stream io.Reader) []string {
 	return msgs
 }
 
-func (d *dockerClient) RemoveImage(name string, force bool, noprune bool) (io.Reader, error) {
+func (d *dockerClient) RemoveImage(name string, force bool, noprune bool) (io.ReadCloser, error) {
 	var (
 		method = "DELETE"
 		uri    = fmt.Sprintf("/images/%s", name)
@@ -536,7 +533,7 @@ func (d *dockerClient) RemoveImage(name string, force bool, noprune bool) (io.Re
 	}
 	uri = fmt.Sprintf("%s?%s", uri, v.Encode())
 
-	respBody, _, err := d.newRequest(method, uri, nil)
+	respBody, err := d.newRequest(method, uri, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -550,13 +547,12 @@ func (d *dockerClient) ContainerWait(name string) error {
 		uri    = fmt.Sprintf("/containers/%s/wait", name)
 	)
 
-	respBody, conn, err := d.newRequest(method, uri, nil)
+	respBody, err := d.newRequest(method, uri, nil)
 	if err != nil {
 		return err
 	}
 
 	defer respBody.Close()
-	defer conn.Close()
 
 	ioutil.ReadAll(respBody)
 	return nil
@@ -587,4 +583,18 @@ func (d *dockerClient) Attach(name string, logs, stream, stdout, stderr bool, in
 
 	//respBody, conn, err := d.newRequest(method, uri, inStream)
 	return nil, nil, nil
+}
+
+func (d *dockerClient) ContainerStats(name string) (io.ReadCloser, error) {
+	var (
+		method = "GET"
+		uri    = fmt.Sprintf("/containers/%s/stats", name)
+	)
+
+	respBody, err := d.newRequest(method, uri, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return respBody, nil
 }

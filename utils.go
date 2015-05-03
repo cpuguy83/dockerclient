@@ -1,6 +1,9 @@
 package docker
 
-import "strings"
+import (
+	"io"
+	"strings"
+)
 
 func ParseURL(url string) (string, string) {
 	arr := strings.Split(url, "://")
@@ -15,4 +18,20 @@ func ParseURL(url string) (string, string) {
 	}
 
 	return proto, arr[1]
+}
+
+type readCloseWrapper struct {
+	io.Reader
+	closer func() error
+}
+
+func (r *readCloseWrapper) Close() error {
+	return r.closer()
+}
+
+func newReadCloseWrapper(r io.Reader, closer func() error) io.ReadCloser {
+	return &readCloseWrapper{
+		Reader: r,
+		closer: closer,
+	}
 }

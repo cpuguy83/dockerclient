@@ -75,16 +75,16 @@ type (
 		MemTotal           int64
 		Name               string
 		ID                 string
-		Debug              int
+		Debug              bool
 		NFd                int
 		NGoroutines        int
 		NEventsListener    int
 		InitPath           string
 		InitSha1           string
 		IndexServerAddress string
-		MemoryLimit        int
-		SwapLimit          int
-		IPv4Forwarding     int
+		MemoryLimit        bool
+		SwapLimit          bool
+		IPv4Forwarding     bool
 		Labels             []string
 		DockerRootDir      string
 		OperatingSystem    string

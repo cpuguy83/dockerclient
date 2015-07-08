@@ -10,7 +10,9 @@ type Container struct {
 	Name            string
 	NetworkSettings *NetworkSettings
 	State           struct {
-		Running bool
+		Running  bool
+		ExitCode int
+		Error    string
 	}
 	Config struct {
 		Image        string
